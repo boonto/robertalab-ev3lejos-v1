@@ -1,20 +1,14 @@
 package de.fhg.iais.roberta.runtime.ev3;
 
-import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.net.Socket;
-import java.net.UnknownHostException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.Set;
-import java.util.concurrent.Callable;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -1433,52 +1427,33 @@ public class Hal {
 
     // --- Sensoren AugmentedRealitySensor ---
 
+    private ExecutorService executorService = Executors.newSingleThreadExecutor();
+    private AugmentedRealitySocketTask arSocketTask;
+    private Future<Void> arSocketTaskFuture;
+
+    public void initAugmentedRealitySensor(String hostName, int portNumber) {
+        arSocketTask = new AugmentedRealitySocketTask(hostName, portNumber);
+        startAugmentedRealitySensor();
+    }
+
+    private void startAugmentedRealitySensor() {
+        arSocketTaskFuture = executorService.submit(arSocketTask);
+    }
+
     public synchronized float getAugmentedRealitySensorDistance() {
-
-        ExecutorService executorService = Executors.newSingleThreadExecutor();
-        Future future = executorService.submit(new Callable<Void>() {
-            @Override public Void call() {
-                String hostName = "192.168.178.20";
-                int portNumber = 48269;
-
-                try (
-                    Socket socket = new Socket(hostName, portNumber);
-                    PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-                    BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
-                ) {
-                    clearDisplay();
-                    drawText("Connected to ", 0, 0);
-                    drawText(hostName + ':' + portNumber, 0, 1);
-
-                    String fromServer;
-                    while ((fromServer = in.readLine()) != null) {
-                        clearDisplay();
-                        drawText(fromServer,0,0);
-
-                        out.println("Alive");
-                    }
-                } catch (UnknownHostException e) {
-                    clearDisplay();
-                    drawText("Don't know about host", 0,0);
-                    drawText(hostName + ':' + portNumber, 0, 1);
-                } catch (IOException e) {
-                    clearDisplay();
-                    drawText("Couldn't connect to",0,0);
-                    drawText(hostName + ':' + portNumber, 0, 1);
-                }
-                return null;
+        if (arSocketTaskFuture.isDone() || arSocketTaskFuture.isCancelled()) {
+            try {
+                arSocketTaskFuture.get();
+            } catch (InterruptedException e) {
+                displayExceptionWaitForKeyPress(e);
+            } catch (ExecutionException e) {
+                // get the cause of the execution exception, which is the exception thrown in the callable
+                displayExceptionWaitForKeyPress(new Exception(e.getCause()));
             }
-        });
-
-        try {
-            future.get();
-        } catch ( InterruptedException e ) {
-            e.printStackTrace();
-        } catch ( ExecutionException e ) {
-            e.printStackTrace();
+            startAugmentedRealitySensor();
         }
 
-        return 0;
+        return arSocketTask.getDistance();
     }
 
     // END Sensoren AugmentedRealitySensor ---
