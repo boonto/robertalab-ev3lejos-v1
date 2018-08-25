@@ -1,19 +1,26 @@
 package de.fhg.iais.roberta.runtime.ev3;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
-import java.io.PrintWriter;
-import java.net.Socket;
+import java.net.InetSocketAddress;
+import java.net.NoRouteToHostException;
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
+import java.nio.channels.SocketChannel;
+import java.nio.charset.StandardCharsets;
+import java.util.Iterator;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 
 public class AugmentedRealitySocketTask implements Callable<Void> {
     private String hostName;
     private int portNumber;
 
-    private volatile float distance;
+    private Selector selector;
+    private SocketChannel client;
+    private ByteBuffer readBuffer = ByteBuffer.allocate(Float.SIZE / Byte.SIZE);
+
+    private volatile float distance = Float.MAX_VALUE;
 
     public AugmentedRealitySocketTask(String hostName, int portNumber) {
         this.hostName = hostName;
@@ -22,34 +29,61 @@ public class AugmentedRealitySocketTask implements Callable<Void> {
 
     @Override
     public Void call() throws IOException {
-        Socket socket = new Socket(this.hostName, this.portNumber);
-        final PrintWriter out = new PrintWriter(socket.getOutputStream(), true);
-        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-        String fromServer;
+        try {
+            this.selector = Selector.open();
+            this.client = SocketChannel.open();
+            this.client.connect(new InetSocketAddress(this.hostName, this.portNumber));
+            this.client.configureBlocking(false);
+            this.client.register(this.selector, SelectionKey.OP_WRITE);
 
-        // Start heartbeat thread
-        Future future = Executors.newSingleThreadExecutor().submit(new Runnable() {
-            @Override
-            public void run() {
-                while (!Thread.currentThread().isInterrupted()) {
+            while (!Thread.currentThread().isInterrupted()) {
+                this.selector.select(5000L);
+                Iterator<SelectionKey> selectedKeys = this.selector.selectedKeys().iterator();
+                while (selectedKeys.hasNext()) {
+                    SelectionKey key = selectedKeys.next();
+                    selectedKeys.remove();
+
+                    if (key.isReadable()) {
+                        this.read(key);
+                    } else if (key.isWritable()) {
+                        this.write(key);
+                    }
+
                     try {
-                        out.println("alive");
-                        Thread.sleep(1000L);
+                        Thread.sleep(100L);
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
                     }
                 }
             }
-        });
-
-        while ((fromServer = in.readLine()) != null) {
-            this.distance = Float.parseFloat(fromServer);
+        } finally {
+            for (SelectionKey key : this.selector.keys()) {
+                key.channel().close();
+                key.cancel();
+            }
+            this.selector.close();
+            this.client.close();
         }
-        future.cancel(true);
-        socket.close();
-        out.close();
-        in.close();
         return null;
+    }
+
+    private void read(SelectionKey key) throws IOException, ClosedChannelException {
+        SocketChannel client = (SocketChannel) key.channel();
+        this.readBuffer.clear();
+
+        client.read(this.readBuffer);
+        this.readBuffer.flip();
+
+        this.distance = this.readBuffer.getFloat();
+
+        client.register(this.selector, SelectionKey.OP_WRITE);
+    }
+
+    private void write(SelectionKey key) throws IOException, ClosedChannelException {
+        SocketChannel client = (SocketChannel) key.channel();
+        client.write(ByteBuffer.wrap("alive".getBytes()));
+
+        client.register(this.selector, SelectionKey.OP_READ);
     }
 
     public float getDistance() {

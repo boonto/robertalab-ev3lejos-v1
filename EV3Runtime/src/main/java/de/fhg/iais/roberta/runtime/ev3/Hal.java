@@ -1456,6 +1456,11 @@ public class Hal {
         return arSocketTask.getDistance();
     }
 
+    public void stopAugmentedRealitySensor() {
+        arSocketTaskFuture.cancel(true);
+        executorService.shutdown();
+    }
+
     // END Sensoren AugmentedRealitySensor ---
 
     // --- Sensoren Zeitgeber ---
